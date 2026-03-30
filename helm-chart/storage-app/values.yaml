@@ -1,0 +1,98 @@
+# Default values for storage-app.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: storage-app
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: storage-app.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Application configuration
+app:
+  # Database configuration
+  database:
+    url: "sqlite:///./storage_app.db"
+    
+  # Security settings
+  security:
+    secretKey: "your-secret-key-change-in-production"
+    algorithm: "HS256"
+    accessTokenExpireMinutes: 30
+  
+  # Entra ID configuration (optional)
+  auth:
+    enableEntraAuth: false
+    azureClientId: ""
+    azureClientSecret: ""
+    azureTenantId: ""
+    azureAuthority: ""
+  
+  # CORS configuration
+  cors:
+    origins: '["http://localhost:3000","http://localhost:8000"]'
+
+# PostgreSQL configuration (optional)
+postgresql:
+  enabled: false
+  auth:
+    postgresPassword: "storage123"
+    username: "storage"
+    password: "storage123"
+    database: "storage"
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi

@@ -1,0 +1,416 @@
+openapi: 3.0.3
+info:
+  title: Storage Items API
+  description: A simple API for managing storage items with CRUD operations
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+
+servers:
+  - url: https://api.example.com/v1
+    description: Production server
+  - url: https://staging-api.example.com/v1
+    description: Staging server
+
+paths:
+  /storage-items:
+    get:
+      summary: List all storage items
+      description: Retrieve a list of all storage items with optional pagination
+      operationId: listStorageItems
+      parameters:
+        - name: page
+          in: query
+          description: Page number for pagination
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Number of items per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: category
+          in: query
+          description: Filter by category
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of storage items retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StorageItem'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Create a new storage item
+      description: Create a new storage item with the provided data
+      operationId: createStorageItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStorageItemRequest'
+      responses:
+        '201':
+          description: Storage item created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItem'
+        '400':
+          description: Bad request - invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict - item already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storage-items/{id}:
+    get:
+      summary: Get a storage item by ID
+      description: Retrieve a specific storage item by its unique identifier
+      operationId: getStorageItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Unique identifier of the storage item
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Storage item retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItem'
+        '404':
+          description: Storage item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    put:
+      summary: Update a storage item
+      description: Update an existing storage item with new data
+      operationId: updateStorageItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Unique identifier of the storage item
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStorageItemRequest'
+      responses:
+        '200':
+          description: Storage item updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItem'
+        '400':
+          description: Bad request - invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Storage item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    delete:
+      summary: Delete a storage item
+      description: Remove a storage item from the system
+      operationId: deleteStorageItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Unique identifier of the storage item
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Storage item deleted successfully
+        '404':
+          description: Storage item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    StorageItem:
+      type: object
+      required:
+        - id
+        - name
+        - category
+        - quantity
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the storage item
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        name:
+          type: string
+          description: Name of the storage item
+          example: "Office Supplies"
+          maxLength: 255
+        description:
+          type: string
+          description: Detailed description of the item
+          example: "Various office supplies including pens, papers, and staplers"
+          maxLength: 1000
+        category:
+          type: string
+          description: Category of the storage item
+          example: "Office Equipment"
+          maxLength: 100
+        quantity:
+          type: integer
+          description: Current quantity in storage
+          example: 50
+          minimum: 0
+        unitPrice:
+          type: number
+          format: decimal
+          description: Price per unit in dollars
+          example: 2.99
+          minimum: 0
+        location:
+          type: string
+          description: Storage location
+          example: "Warehouse A, Shelf 3"
+          maxLength: 255
+        tags:
+          type: array
+          description: Tags for categorization and search
+          items:
+            type: string
+          example: ["supplies", "office", "essential"]
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp when the item was created
+          example: "2023-01-15T10:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp when the item was last updated
+          example: "2023-01-15T10:30:00Z"
+
+    CreateStorageItemRequest:
+      type: object
+      required:
+        - name
+        - category
+        - quantity
+      properties:
+        name:
+          type: string
+          description: Name of the storage item
+          example: "Office Supplies"
+          maxLength: 255
+        description:
+          type: string
+          description: Detailed description of the item
+          example: "Various office supplies including pens, papers, and staplers"
+          maxLength: 1000
+        category:
+          type: string
+          description: Category of the storage item
+          example: "Office Equipment"
+          maxLength: 100
+        quantity:
+          type: integer
+          description: Initial quantity in storage
+          example: 50
+          minimum: 0
+        unitPrice:
+          type: number
+          format: decimal
+          description: Price per unit in dollars
+          example: 2.99
+          minimum: 0
+        location:
+          type: string
+          description: Storage location
+          example: "Warehouse A, Shelf 3"
+          maxLength: 255
+        tags:
+          type: array
+          description: Tags for categorization and search
+          items:
+            type: string
+          example: ["supplies", "office", "essential"]
+
+    UpdateStorageItemRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the storage item
+          example: "Office Supplies"
+          maxLength: 255
+        description:
+          type: string
+          description: Detailed description of the item
+          example: "Various office supplies including pens, papers, and staplers"
+          maxLength: 1000
+        category:
+          type: string
+          description: Category of the storage item
+          example: "Office Equipment"
+          maxLength: 100
+        quantity:
+          type: integer
+          description: Current quantity in storage
+          example: 50
+          minimum: 0
+        unitPrice:
+          type: number
+          format: decimal
+          description: Price per unit in dollars
+          example: 2.99
+          minimum: 0
+        location:
+          type: string
+          description: Storage location
+          example: "Warehouse A, Shelf 3"
+          maxLength: 255
+        tags:
+          type: array
+          description: Tags for categorization and search
+          items:
+            type: string
+          example: ["supplies", "office", "essential"]
+
+    Pagination:
+      type: object
+      required:
+        - page
+        - limit
+        - total
+        - totalPages
+      properties:
+        page:
+          type: integer
+          description: Current page number
+          example: 1
+        limit:
+          type: integer
+          description: Number of items per page
+          example: 20
+        total:
+          type: integer
+          description: Total number of items
+          example: 150
+        totalPages:
+          type: integer
+          description: Total number of pages
+          example: 8
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Error code
+          example: "ITEM_NOT_FOUND"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "The requested storage item could not be found"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BearerAuth: []

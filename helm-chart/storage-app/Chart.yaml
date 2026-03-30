@@ -1,0 +1,20 @@
+apiVersion: v2
+name: storage-app
+description: A Storage Management Application Helm chart for Kubernetes
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+home: https://github.com/your-org/storage-app
+sources:
+  - https://github.com/your-org/storage-app
+
+keywords:
+  - storage
+  - management
+  - fastapi
+  - react
+
+maintainers:
+  - name: Development Team
+    email: dev@example.com
