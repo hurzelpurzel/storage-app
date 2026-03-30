@@ -41,11 +41,76 @@ if [ ! -f "storage-api.yaml" ]; then
     exit 1
 fi
 
-print_status "Installing Python dependencies..."
-pip install -r requirements.txt || {
-    print_error "Failed to install Python dependencies"
-    exit 1
-}
+# Check for PostgreSQL development packages (optional)
+print_status "Checking system dependencies..."
+pg_config_available=false
+if command -v pg_config &> /dev/null; then
+    print_status "PostgreSQL development tools found."
+    pg_config_available=true
+elif command -v apt-get &> /dev/null && dpkg -l | grep -q libpq-dev; then
+    print_status "PostgreSQL development packages found."
+    pg_config_available=true
+elif command -v yum &> /dev/null && rpm -qa | grep -q postgresql-devel; then
+    print_status "PostgreSQL development packages found."
+    pg_config_available=true
+elif command -v dnf &> /dev/null && rpm -qa | grep -q postgresql-devel; then
+    print_status "PostgreSQL development packages found."
+    pg_config_available=true
+elif command -v brew &> /dev/null && brew list | grep -q postgresql; then
+    print_status "PostgreSQL found via Homebrew."
+    pg_config_available=true
+else
+    print_warning "PostgreSQL development headers not found."
+    print_warning "PostgreSQL support will be disabled. SQLite will be used instead."
+    print_warning "To enable PostgreSQL, install development headers:"
+    print_warning "  Ubuntu/Debian: sudo apt-get install libpq-dev"
+    print_warning "  Red Hat/CentOS: sudo yum install postgresql-devel"
+    print_warning "  Fedora: sudo dnf install postgresql-devel"
+    print_warning "  macOS: brew install postgresql"
+fi
+
+# Choose installation approach based on PostgreSQL availability
+if [ "$pg_config_available" = true ]; then
+    print_status "Installing Python dependencies (with PostgreSQL support)..."
+    if pip install -r requirements.txt; then
+        print_status "All dependencies installed successfully (including PostgreSQL support)."
+    else
+        print_warning "Failed to install with PostgreSQL. Falling back to SQLite..."
+        pg_config_available=false
+    fi
+fi
+
+if [ "$pg_config_available" = false ]; then
+    print_status "Installing SQLite-only dependencies..."
+    
+    # Create temporary requirements file without PostgreSQL dependencies and with compatible versions
+    cat > requirements_sqlite.txt << EOF
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+pydantic>=2.10.0
+pydantic-settings>=2.4.0
+python-multipart>=0.0.6
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+msal>=1.25.0
+httpx>=0.25.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+EOF
+    
+    if pip install -r requirements_sqlite.txt; then
+        print_status "SQLite-compatible dependencies installed successfully."
+        print_warning "PostgreSQL support disabled. Using SQLite database."
+        print_warning "Your .env file is already configured for SQLite by default."
+        rm requirements_sqlite.txt
+    else
+        rm requirements_sqlite.txt
+        print_error "Failed to install dependencies. Please check your Python environment."
+        exit 1
+    fi
+fi
 
 print_status "Installing Node.js dependencies..."
 cd frontend || {
