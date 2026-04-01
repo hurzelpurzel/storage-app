@@ -46,3 +46,50 @@ class ErrorResponse(BaseModel):
     code: str
     message: str
     details: Optional[dict] = None
+
+
+# ---------------------------------------------------------------------------
+# S3 User models
+# ---------------------------------------------------------------------------
+
+class S3UserCreate(BaseModel):
+    """Request body for creating a new S3 user via the NetApp SVM API."""
+    username: str = Field(..., min_length=1, max_length=255)
+    comment: Optional[str] = Field(None, max_length=1000)
+    environment: str = Field(..., min_length=1, max_length=100)
+
+
+class S3User(BaseModel):
+    """Persisted S3 user record (secret key is never stored)."""
+    id: str
+    environment: str
+    username: str
+    comment: Optional[str]
+    access_key: str
+    key_expiry_time: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class S3UserCreateResponse(S3User):
+    """Response returned immediately after creation — includes the one-time secret."""
+    secret_key: str
+
+
+class S3UserListResponse(BaseModel):
+    data: List[S3User]
+
+
+# ---------------------------------------------------------------------------
+# SVM environment listing (returned to the frontend)
+# ---------------------------------------------------------------------------
+
+class SvmEnvironment(BaseModel):
+    """Minimal public info about a configured SVM environment (no credentials)."""
+    name: str
+
+
+class SvmEnvironmentsResponse(BaseModel):
+    environments: List[SvmEnvironment]

@@ -5,16 +5,20 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 import os
+import httpx
 
-from .config import settings
+from .config import settings, SvmConfig
 from .database import get_db, create_tables
 from .models import (
-    StorageItem, StorageItemCreate, StorageItemUpdate, 
-    StorageItemListResponse, ErrorResponse
+    StorageItem, StorageItemCreate, StorageItemUpdate,
+    StorageItemListResponse, ErrorResponse,
+    S3UserCreate, S3User as S3UserSchema, S3UserCreateResponse, S3UserListResponse,
+    SvmEnvironment, SvmEnvironmentsResponse,
 )
 from .crud import (
     get_storage_items, get_storage_item, create_storage_item,
-    update_storage_item, delete_storage_item
+    update_storage_item, delete_storage_item,
+    get_s3_users, get_s3_user_by_username, create_s3_user,
 )
 from .auth import get_current_user_optional, get_entra_auth_url, verify_entra_token, create_access_token
 
@@ -154,6 +158,213 @@ async def delete_storage_item_by_id(
     deleted = delete_storage_item(db, item_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Storage item not found")
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_svm_or_404(environment: str) -> SvmConfig:
+    """Resolve environment name to SvmConfig or raise 404."""
+    configs = settings.get_svm_configs()
+    cfg = configs.get(environment)
+    if not cfg:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Environment '{environment}' is not configured.",
+        )
+    return cfg
+
+
+def _netapp_headers() -> dict:
+    return {"Content-Type": "application/json", "Accept": "application/json"}
+
+
+# ---------------------------------------------------------------------------
+# S3 Object Storage — Environment discovery
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/api/s3/environments",
+    response_model=SvmEnvironmentsResponse,
+)
+async def list_svm_environments(
+    current_user=Depends(get_current_user_optional()),
+):
+    """Return the list of configured SVM environment names (no credentials exposed)."""
+    configs = settings.get_svm_configs()
+    return SvmEnvironmentsResponse(
+        environments=[SvmEnvironment(name=name) for name in configs]
+    )
+
+
+# ---------------------------------------------------------------------------
+# S3 Object Storage — User Management endpoints
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/api/s3/users",
+    response_model=S3UserListResponse,
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
+async def list_s3_users(
+    environment: str = Query(..., description="SVM environment name, e.g. DEV/TEST"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_optional()),
+):
+    """
+    List all S3 users for the given environment stored in the local database.
+    Also refreshes each user's details from NetApp so the UI always shows
+    up-to-date access_key and key_expiry_time.
+    """
+    # Validate environment is configured
+    cfg = _get_svm_or_404(environment)
+
+    try:
+        db_users = get_s3_users(db, environment=environment)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Refresh details from NetApp for each user (best-effort — don't fail the
+    # whole list if a single NetApp call fails).
+    refreshed = []
+    async with httpx.AsyncClient(
+        auth=(cfg.username, cfg.password),
+        verify=settings.netapp_verify_ssl,
+        timeout=15,
+    ) as client:
+        for user in db_users:
+            netapp_url = (
+                f"{cfg.base_url}/protocols/s3/services"
+                f"/{cfg.svm_uuid}/users/{user.username}"
+            )
+            try:
+                resp = await client.get(netapp_url, headers=_netapp_headers())
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # NetApp may wrap the result in a records array
+                    if "records" in data and data["records"]:
+                        record = data["records"][0]
+                    else:
+                        record = data
+                    # Update local fields if NetApp returned them
+                    if record.get("access_key"):
+                        user.access_key = record["access_key"]
+                    if record.get("key_expiry_time") is not None:
+                        user.key_expiry_time = record["key_expiry_time"]
+            except Exception:
+                pass  # Use locally stored data on failure
+            refreshed.append(user)
+
+    return {"data": refreshed}
+
+
+@app.post(
+    "/api/s3/users",
+    response_model=S3UserCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
+async def create_new_s3_user(
+    payload: S3UserCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_optional()),
+):
+    """
+    Create a new S3 user on the NetApp SVM for the specified environment.
+
+    NetApp POST /api/protocols/s3/services/{svm.uuid}/users
+    Expected response (s3_user_post_patch_response):
+      { "num_records": 1, "records": [{ "access_key": "...", "secret_key": "...",
+                                        "name": "...", "key_expiry_time": "..." }] }
+
+    The access_key (and optional key_expiry_time) are stored in the database.
+    The secret_key is returned to the caller exactly once and never persisted.
+    """
+    cfg = _get_svm_or_404(payload.environment)
+
+    # Check for duplicate username within this environment
+    if get_s3_user_by_username(db, payload.environment, payload.username):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"S3 user '{payload.username}' already exists "
+                f"in environment '{payload.environment}'."
+            ),
+        )
+
+    netapp_url = (
+        f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/users"
+    )
+    netapp_body: dict = {"name": payload.username}
+    if payload.comment:
+        netapp_body["comment"] = payload.comment
+
+    try:
+        async with httpx.AsyncClient(
+            auth=(cfg.username, cfg.password),
+            verify=settings.netapp_verify_ssl,
+            timeout=30,
+        ) as client:
+            response = await client.post(
+                netapp_url,
+                json=netapp_body,
+                headers=_netapp_headers(),
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach NetApp SVM API: {exc}",
+        )
+
+    if response.status_code not in (200, 201):
+        raise HTTPException(
+            status_code=502,
+            detail=f"NetApp SVM API returned {response.status_code}: {response.text}",
+        )
+
+    try:
+        netapp_data = response.json()
+        # NetApp wraps results in a records array
+        records = netapp_data.get("records", [])
+        if not records:
+            raise ValueError("Empty records array in NetApp response")
+        record = records[0]
+        access_key: str = record["access_key"]
+        secret_key: str = record["secret_key"]
+        key_expiry_time: Optional[str] = record.get("key_expiry_time")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unexpected response from NetApp SVM API: {exc}",
+        )
+
+    # Persist user (without the secret)
+    db_user = create_s3_user(
+        db,
+        environment=payload.environment,
+        username=payload.username,
+        access_key=access_key,
+        comment=payload.comment,
+        key_expiry_time=key_expiry_time,
+    )
+
+    return S3UserCreateResponse(
+        id=db_user.id,
+        environment=db_user.environment,
+        username=db_user.username,
+        comment=db_user.comment,
+        access_key=db_user.access_key,
+        key_expiry_time=db_user.key_expiry_time,
+        created_at=db_user.created_at,
+        secret_key=secret_key,
+    )
+
 
 @app.get("/api/health")
 async def health_check():

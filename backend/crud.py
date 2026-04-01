@@ -3,7 +3,7 @@ from sqlalchemy import and_
 from typing import List, Optional
 import json
 import math
-from .database import StorageItem
+from .database import StorageItem, S3User
 from .models import StorageItemCreate, StorageItemUpdate
 
 def get_storage_items(
@@ -124,3 +124,48 @@ def delete_storage_item(db: Session, item_id: str):
         db.commit()
         return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# S3 User CRUD
+# ---------------------------------------------------------------------------
+
+def get_s3_users(db: Session, environment: Optional[str] = None) -> List[S3User]:
+    """Return S3 users ordered by creation date, optionally filtered by environment."""
+    query = db.query(S3User)
+    if environment:
+        query = query.filter(S3User.environment == environment)
+    return query.order_by(S3User.created_at).all()
+
+
+def get_s3_user_by_username(
+    db: Session, environment: str, username: str
+) -> Optional[S3User]:
+    """Look up a single S3 user by environment + username."""
+    return (
+        db.query(S3User)
+        .filter(S3User.environment == environment, S3User.username == username)
+        .first()
+    )
+
+
+def create_s3_user(
+    db: Session,
+    environment: str,
+    username: str,
+    access_key: str,
+    comment: Optional[str] = None,
+    key_expiry_time: Optional[str] = None,
+) -> S3User:
+    """Persist a new S3 user record (secret key is not stored)."""
+    db_user = S3User(
+        environment=environment,
+        username=username,
+        access_key=access_key,
+        comment=comment,
+        key_expiry_time=key_expiry_time,
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user

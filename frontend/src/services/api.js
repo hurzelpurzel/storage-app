@@ -77,4 +77,32 @@ export const healthApi = {
   },
 };
 
+// S3 — Environment discovery
+export const s3EnvironmentsApi = {
+  // Returns { environments: [{ name: "DEV/TEST" }, ...] }
+  listEnvironments: async () => {
+    const response = await api.get('/s3/environments');
+    return response.data;
+  },
+};
+
+// S3 User Management API
+export const s3UsersApi = {
+  // List all S3 users for a given environment (also refreshes from NetApp).
+  // Returns { data: [...] }
+  listUsers: async (environment) => {
+    const response = await api.get('/s3/users', { params: { environment } });
+    return response.data;
+  },
+
+  // Create a new S3 user via the NetApp SVM API.
+  // Returns the user record including the one-time secret_key.
+  createUser: async (environment, username, comment) => {
+    const body = { environment, username };
+    if (comment) body.comment = comment;
+    const response = await api.post('/s3/users', body);
+    return response.data;
+  },
+};
+
 export default api;
