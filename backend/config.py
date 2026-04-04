@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     azure_client_secret: Optional[str] = None
     azure_tenant_id: Optional[str] = None
     azure_authority: Optional[str] = None
+    # The URI Azure will redirect back to after login.
+    # Must match exactly what is registered in the Azure app registration.
+    # Default is the React dev server root — change for production.
+    redirect_uri: str = "http://localhost:3000/"
+    # When ENABLE_ENTRA_AUTH=false, this username is used as the auto-logged-in dev user.
+    dev_user: str = "dev-user"
 
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]

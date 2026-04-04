@@ -1,4 +1,5 @@
 import React from 'react';
+import AuthBar from './AuthBar';
 
 const CATEGORIES = [
   {
@@ -17,6 +18,8 @@ const CATEGORIES = [
 const CategoryPicker = ({ onSelect }) => {
   return (
     <div style={styles.container}>
+      <AuthBar />
+      <div style={styles.body}>
       <div style={styles.header}>
         <h1 style={styles.title}>Storage Management</h1>
         <p style={styles.subtitle}>Select a service category to get started</p>
@@ -44,6 +47,7 @@ const CategoryPicker = ({ onSelect }) => {
           </button>
         ))}
       </div>
+      </div>
     </div>
   );
 };
@@ -52,6 +56,11 @@ const styles = {
   container: {
     minHeight: '100vh',
     backgroundColor: '#f4f6f9',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  body: {
+    flex: 1,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',

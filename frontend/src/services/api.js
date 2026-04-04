@@ -19,6 +19,19 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// On 401, clear the stored token so the user is shown the login screen
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('token');
+      // Reload the page so AuthContext re-reads the now-empty localStorage
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Storage Items API
 export const storageItemsApi = {
   // Get all storage items with pagination
@@ -56,15 +69,15 @@ export const storageItemsApi = {
 
 // Authentication API
 export const authApi = {
-  // Get login URL for Entra ID
-  getLoginUrl: async () => {
-    const response = await api.get('/auth/login-url');
+  // Get login URL for Entra ID — requires a PKCE code_challenge
+  getLoginUrl: async (code_challenge) => {
+    const response = await api.get('/auth/login-url', { params: { code_challenge } });
     return response.data;
   },
 
-  // Handle auth callback
-  handleCallback: async (code) => {
-    const response = await api.post('/auth/callback', { code });
+  // Handle auth callback — requires the PKCE code_verifier that matches the challenge
+  handleCallback: async (code, code_verifier) => {
+    const response = await api.post('/auth/callback', { code, code_verifier });
     return response.data;
   },
 };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import UserManagement from './UserManagement';
+import AuthBar from './AuthBar';
 import { s3EnvironmentsApi } from '../services/api';
 
 const SECTIONS = [
@@ -46,6 +47,7 @@ const S3ObjectStorage = ({ onBack }) => {
 
   return (
     <div style={styles.page}>
+      <AuthBar />
       {/* Top navigation bar */}
       <div style={styles.topBar}>
         <button style={styles.backButton} onClick={onBack}>
