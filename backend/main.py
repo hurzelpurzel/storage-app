@@ -19,7 +19,7 @@ from .models import (
 from .crud import (
     get_storage_items, get_storage_item, create_storage_item,
     update_storage_item, delete_storage_item,
-    get_s3_users, get_s3_user_by_username, create_s3_user,
+    get_s3_users, get_s3_user_by_username, create_s3_user, delete_s3_user,
 )
 from .auth import get_current_user_optional, get_current_user_required, get_entra_auth_url, verify_entra_token, create_access_token
 
@@ -247,7 +247,7 @@ async def list_s3_users(
     cfg = _get_svm_or_404(environment)
 
     try:
-        db_users = get_s3_users(db, environment=environment)
+        db_users = get_s3_users(db, owner_email=current_user, environment=environment)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -374,6 +374,7 @@ async def create_new_s3_user(
     # Persist user (without the secret)
     db_user = create_s3_user(
         db,
+        owner_email=current_user,
         environment=payload.environment,
         username=payload.username,
         access_key=access_key,
@@ -391,6 +392,49 @@ async def create_new_s3_user(
         created_at=db_user.created_at,
         secret_key=secret_key,
     )
+
+@app.delete("/api/s3/users/{environment}/{username}", status_code=204)
+async def delete_s3_user_route(
+    environment: str,
+    username: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    """
+    Delete an S3 user from the NetApp SVM and sync the local SQLite store.
+    """
+    # 1. Enforce ownership tracking natively in the DB query logic
+    local_user = get_s3_user_by_username(db, environment, username)
+    if not local_user or local_user.owner_email != current_user:
+        raise HTTPException(status_code=404, detail="S3 user not found or you lack ownership permissions.")
+
+    cfg = _get_svm_or_404(environment)
+    netapp_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/users/{username}"
+
+    # 2. Fire the network cancellation command to SVM
+    try:
+        async with httpx.AsyncClient(
+            auth=(cfg.username, cfg.password),
+            verify=settings.netapp_verify_ssl,
+            timeout=30,
+        ) as client:
+            response = await client.delete(netapp_url, headers=_netapp_headers())
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach NetApp SVM API: {exc}",
+        )
+
+    # Allow 404 from NetApp (already deleted on server)
+    if response.status_code not in (200, 204, 404):
+        raise HTTPException(
+            status_code=502,
+            detail=f"NetApp SVM API returned {response.status_code}: {response.text}",
+        )
+
+    # 3. Synchronize local storage wipe
+    delete_s3_user(db, current_user, environment, username)
+    return None
 
 
 @app.get("/api/health")

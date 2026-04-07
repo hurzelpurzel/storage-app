@@ -130,9 +130,9 @@ def delete_storage_item(db: Session, item_id: str):
 # S3 User CRUD
 # ---------------------------------------------------------------------------
 
-def get_s3_users(db: Session, environment: Optional[str] = None) -> List[S3User]:
-    """Return S3 users ordered by creation date, optionally filtered by environment."""
-    query = db.query(S3User)
+def get_s3_users(db: Session, owner_email: str, environment: Optional[str] = None) -> List[S3User]:
+    """Return S3 users ordered by creation date, filtered by owner and optionally environment."""
+    query = db.query(S3User).filter(S3User.owner_email == owner_email)
     if environment:
         query = query.filter(S3User.environment == environment)
     return query.order_by(S3User.created_at).all()
@@ -151,6 +151,7 @@ def get_s3_user_by_username(
 
 def create_s3_user(
     db: Session,
+    owner_email: str,
     environment: str,
     username: str,
     access_key: str,
@@ -159,6 +160,7 @@ def create_s3_user(
 ) -> S3User:
     """Persist a new S3 user record (secret key is not stored)."""
     db_user = S3User(
+        owner_email=owner_email,
         environment=environment,
         username=username,
         access_key=access_key,
@@ -169,3 +171,16 @@ def create_s3_user(
     db.commit()
     db.refresh(db_user)
     return db_user
+
+def delete_s3_user(db: Session, owner_email: str, environment: str, username: str) -> bool:
+    """Delete an S3 user, bound strictly to the owner_email."""
+    db_user = (
+        db.query(S3User)
+        .filter(S3User.owner_email == owner_email, S3User.environment == environment, S3User.username == username)
+        .first()
+    )
+    if db_user:
+        db.delete(db_user)
+        db.commit()
+        return True
+    return False

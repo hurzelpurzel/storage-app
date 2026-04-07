@@ -30,6 +30,7 @@ class S3User(Base):
     __tablename__ = "s3_users"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_email = Column(String(255), nullable=False)
     # Environment name this user belongs to (e.g. "DEV/TEST", "UAT/PROD", "INFRA")
     environment = Column(String(100), nullable=False)
     username = Column(String(255), nullable=False)

@@ -116,6 +116,14 @@ export const s3UsersApi = {
     const response = await api.post('/s3/users', body);
     return response.data;
   },
+
+  // Delete an existing S3 user natively from the SVM
+  deleteUser: async (environment, username) => {
+    const encEnv = encodeURIComponent(environment);
+    const encUser = encodeURIComponent(username);
+    const response = await api.delete(`/s3/users/${encEnv}/${encUser}`);
+    return response.data;
+  },
 };
 
 export default api;

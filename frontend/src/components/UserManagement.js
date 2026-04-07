@@ -34,6 +34,20 @@ const UserManagement = ({ environment }) => {
     loadUsers();
   };
 
+  const handleDeleteUser = async (userEnv, username) => {
+    if (!window.confirm(`Are you sure you want to completely delete S3 user '${username}'?`)) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      await s3UsersApi.deleteUser(userEnv, username);
+      await loadUsers(); // Refresh grid automatically
+    } catch (err) {
+      setError('Failed to delete S3 user. ' + (err.response?.data?.detail || err.message));
+      setLoading(false); // Only toggle loading false on err, loadUsers toggles it on success
+    }
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return '—';
     return new Date(dateString).toLocaleString();
@@ -98,6 +112,7 @@ const UserManagement = ({ environment }) => {
                 <th style={styles.th}>Comment</th>
                 <th style={styles.th}>Key Expires</th>
                 <th style={styles.th}>Created At</th>
+                <th style={styles.th}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -119,6 +134,14 @@ const UserManagement = ({ environment }) => {
                   </td>
                   <td style={{ ...styles.td, ...styles.dateCell }}>
                     {formatDate(user.created_at)}
+                  </td>
+                  <td style={styles.td}>
+                    <button
+                      style={styles.deleteButton}
+                      onClick={() => handleDeleteUser(user.environment, user.username)}
+                    >
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -280,6 +303,17 @@ const styles = {
   createButtonDisabled: {
     backgroundColor: '#93c5fd',
     cursor: 'not-allowed',
+  },
+  deleteButton: {
+    padding: '4px 10px',
+    backgroundColor: '#fef2f2',
+    color: '#ef4444',
+    border: '1px solid #fee2e2',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: '600',
+    transition: 'all 0.2s',
   },
 };
 

@@ -62,6 +62,7 @@ class S3UserCreate(BaseModel):
 class S3User(BaseModel):
     """Persisted S3 user record (secret key is never stored)."""
     id: str
+    owner_email: str
     environment: str
     username: str
     comment: Optional[str]
