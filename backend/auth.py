@@ -70,7 +70,13 @@ def get_entra_auth_url(code_challenge: str) -> Optional[str]:
         return None
 
     # Use MSAL only to resolve the correct authorization endpoint for the tenant
-    auth_endpoint = _get_msal_app().authority.authorization_endpoint
+    try:
+        auth_endpoint = _get_msal_app().authority.authorization_endpoint
+    except Exception as e:
+        if "ssl" in str(e).lower() or "certificate" in str(e).lower():
+            ca_used = os.environ.get("REQUESTS_CA_BUNDLE", "System Default")
+            raise Exception(f"{str(e)} [Diagnostic: REQUESTS_CA_BUNDLE used was '{ca_used}']")
+        raise e
 
     params = {
         "client_id": settings.azure_client_id,
@@ -94,12 +100,18 @@ def verify_entra_token(code: str, code_verifier: str):
     if not settings.enable_entra_auth:
         raise HTTPException(status_code=400, detail="Entra authentication not enabled")
 
-    result = _get_msal_app().acquire_token_by_authorization_code(
-        code,
-        scopes=[],
-        redirect_uri=settings.redirect_uri,
-        data={"code_verifier": code_verifier},
-    )
+    try:
+        result = _get_msal_app().acquire_token_by_authorization_code(
+            code,
+            scopes=[],
+            redirect_uri=settings.redirect_uri,
+            data={"code_verifier": code_verifier},
+        )
+    except Exception as e:
+        if "ssl" in str(e).lower() or "certificate" in str(e).lower():
+            ca_used = os.environ.get("REQUESTS_CA_BUNDLE", "System Default")
+            raise Exception(f"{str(e)} [Diagnostic: REQUESTS_CA_BUNDLE used was '{ca_used}']")
+        raise e
 
     if "access_token" not in result:
         error_desc = result.get("error_description", "unknown error")
