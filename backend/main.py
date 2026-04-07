@@ -394,10 +394,10 @@ async def create_new_s3_user(
         secret_key=secret_key,
     )
 
-@app.delete("/api/s3/users/{environment}/{username}", status_code=204)
+@app.delete("/api/s3/users/{username}", status_code=204)
 async def delete_s3_user_route(
-    environment: str,
     username: str,
+    environment: str = Query(...),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_required()),
 ):

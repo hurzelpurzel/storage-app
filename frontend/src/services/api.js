@@ -121,7 +121,7 @@ export const s3UsersApi = {
   deleteUser: async (environment, username) => {
     const encEnv = encodeURIComponent(environment);
     const encUser = encodeURIComponent(username);
-    const response = await api.delete(`/s3/users/${encEnv}/${encUser}`);
+    const response = await api.delete(`/s3/users/${encUser}?environment=${encEnv}`);
     return response.data;
   },
 };
