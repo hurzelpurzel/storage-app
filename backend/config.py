@@ -103,6 +103,19 @@ import os
 if settings.zscaler:
     zscaler_cert_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "zscaler.pem")
     if os.path.exists(zscaler_cert_path):
-        os.environ["REQUESTS_CA_BUNDLE"] = zscaler_cert_path
-        # Also set for standard urllib in case deep dependencies bypass requests
-        os.environ["SSL_CERT_FILE"] = zscaler_cert_path
+        import certifi
+        import tempfile
+        
+        # Zscaler often bypasses Entra ID from SSL inspection. 
+        # If we *only* use Zscaler's CA, Microsoft's real certificates will be rejected.
+        # Solution: Create a composite bundle of standard CAs + Zscaler CAs.
+        fd, composite_cert_path = tempfile.mkstemp(prefix="composite_ca_", suffix=".pem")
+        with os.fdopen(fd, "w") as f_out:
+            with open(certifi.where(), "r") as f_certifi:
+                f_out.write(f_certifi.read())
+            f_out.write("\n")
+            with open(zscaler_cert_path, "r") as f_zscaler:
+                f_out.write(f_zscaler.read())
+                
+        os.environ["REQUESTS_CA_BUNDLE"] = composite_cert_path
+        os.environ["SSL_CERT_FILE"] = composite_cert_path
