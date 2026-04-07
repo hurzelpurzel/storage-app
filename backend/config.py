@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # When ENABLE_ENTRA_AUTH=false, this username is used as the auto-logged-in dev user.
     dev_user: str = "dev-user"
 
+    # Zscaler Support
+    zscaler: bool = False
+
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 
