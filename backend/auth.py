@@ -94,9 +94,9 @@ def verify_entra_token(code: str, code_verifier: str):
 
     result = _get_msal_app().acquire_token_by_authorization_code(
         code,
-        scopes=["openid"],
+        scopes=[],
         redirect_uri=settings.redirect_uri,
-        code_verifier=code_verifier,
+        data={"code_verifier": code_verifier},
     )
 
     if "access_token" not in result:
