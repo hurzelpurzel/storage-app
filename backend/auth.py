@@ -22,20 +22,11 @@ _msal_app: Optional[msal.ConfidentialClientApplication] = None
 def _get_msal_app() -> msal.ConfidentialClientApplication:
     global _msal_app
     if _msal_app is None:
-        http_client = requests.Session()
-        if settings.zscaler:
-            zscaler_cert_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "data", "zscaler.pem"
-            )
-            if os.path.exists(zscaler_cert_path):
-                http_client.verify = zscaler_cert_path
-                
         _msal_app = msal.ConfidentialClientApplication(
             settings.azure_client_id,
             authority=settings.azure_authority
                 or f"https://login.microsoftonline.com/{settings.azure_tenant_id}",
             client_credential=settings.azure_client_secret,
-            http_client=http_client
         )
     return _msal_app
 

@@ -98,3 +98,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+import os
+if settings.zscaler:
+    zscaler_cert_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "zscaler.pem")
+    if os.path.exists(zscaler_cert_path):
+        os.environ["REQUESTS_CA_BUNDLE"] = zscaler_cert_path
+        # Also set for standard urllib in case deep dependencies bypass requests
+        os.environ["SSL_CERT_FILE"] = zscaler_cert_path
