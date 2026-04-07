@@ -384,6 +384,7 @@ async def create_new_s3_user(
 
     return S3UserCreateResponse(
         id=db_user.id,
+        owner_email=db_user.owner_email,
         environment=db_user.environment,
         username=db_user.username,
         comment=db_user.comment,
