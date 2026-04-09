@@ -63,6 +63,9 @@ class S3Bucket(Base):
     # Defaults to 'pending'. Checked asynchronously via UI refresh sweeps.
     bucket_uuid = Column(String(255), default="pending", nullable=False)
     
+    # Defaults to None. Transitions to "pending", then a UTC timestamp on full purge.
+    deletion = Column(String(255), nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Names must be unique within a target environment SVM

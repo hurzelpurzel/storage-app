@@ -236,3 +236,30 @@ def delete_s3_bucket(db: Session, owner_email: str, environment: str, bucket_uui
         db.commit()
         return True
     return False
+
+def mark_s3_bucket_deleting(db: Session, owner_email: str, environment: str, bucket_uuid: str) -> bool:
+    from .database import S3Bucket
+    db_bucket = (
+        db.query(S3Bucket)
+        .filter(
+            S3Bucket.owner_email == owner_email, 
+            S3Bucket.environment == environment, 
+            S3Bucket.bucket_uuid == bucket_uuid
+        )
+        .first()
+    )
+    if db_bucket:
+        db_bucket.deletion = "pending"
+        db.commit()
+        db.refresh(db_bucket)
+        return True
+    return False
+
+def mark_s3_bucket_deleted(db: Session, bucket_id: str, timestamp: str):
+    from .database import S3Bucket
+    db_bucket = db.query(S3Bucket).filter(S3Bucket.id == bucket_id).first()
+    if db_bucket:
+        db_bucket.deletion = timestamp
+        db.commit()
+        db.refresh(db_bucket)
+    return db_bucket

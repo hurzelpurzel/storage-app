@@ -102,6 +102,7 @@ class S3BucketSchema(BaseModel):
     environment: str
     name: str
     bucket_uuid: str
+    deletion: Optional[str] = None
     created_at: datetime
 
     class Config:

@@ -178,6 +178,7 @@ const BucketManagement = ({ environment }) => {
             <tbody>
               {buckets.map((b) => {
                 const isPending = b.bucket_uuid === 'pending';
+                const isDeleting = b.deletion === 'pending';
                 return (
                   <tr key={b.id} style={styles.tr}>
                     <td style={styles.td}>
@@ -203,12 +204,17 @@ const BucketManagement = ({ environment }) => {
                       {formatDate(b.created_at)}
                     </td>
                     <td style={styles.td}>
-                      <button
-                        style={isPending ? styles.deleteButtonDisabled : styles.deleteButton}
-                        onClick={() => handleDeleteBucket(b.bucket_uuid, b.name)}
-                      >
-                        Delete
-                      </button>
+                      {isDeleting ? (
+                         <span style={styles.deletingBadge}>Deleting...</span>
+                      ) : (
+                         <button
+                           style={isPending ? styles.deleteButtonDisabled : styles.deleteButton}
+                           onClick={() => handleDeleteBucket(b.bucket_uuid, b.name)}
+                           disabled={isPending}
+                         >
+                           Delete
+                         </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -397,6 +403,17 @@ const styles = {
     backgroundColor: '#fef3c7',
     color: '#d97706',
     border: '1px solid #fde68a',
+    borderRadius: '16px',
+    fontSize: '12px',
+    fontWeight: '600',
+    fontStyle: 'italic',
+  },
+  deletingBadge: {
+    display: 'inline-block',
+    padding: '4px 8px',
+    backgroundColor: '#fee2e2',
+    color: '#b91c1c',
+    border: '1px solid #fca5a5',
     borderRadius: '16px',
     fontSize: '12px',
     fontWeight: '600',

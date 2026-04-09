@@ -22,8 +22,10 @@ from .crud import (
     update_storage_item, delete_storage_item,
     get_s3_users, get_s3_user_by_username, create_s3_user, delete_s3_user,
     get_s3_buckets, create_s3_bucket, update_s3_bucket_uuid, delete_s3_bucket,
+    mark_s3_bucket_deleting, mark_s3_bucket_deleted,
 )
 from .auth import get_current_user_optional, get_current_user_required, get_entra_auth_url, verify_entra_token, create_access_token
+from datetime import datetime
 
 # Create tables on startup
 create_tables()
@@ -492,13 +494,15 @@ async def list_s3_buckets(
     current_user=Depends(get_current_user_required()),
 ):
     """
-    Fetch S3 buckets for the environment, explicitly resolving pending async buckets from NetApp.
+    Fetch S3 buckets for the environment, explicitly resolving pending async creations and trailing deletions natively.
     """
     cfg = _get_svm_or_404(environment)
     db_buckets = get_s3_buckets(db, current_user, environment)
 
-    pending_buckets = [b for b in db_buckets if b.bucket_uuid == "pending"]
-    if pending_buckets:
+    pending_creations = [b for b in db_buckets if b.bucket_uuid == "pending"]
+    pending_deletions = [b for b in db_buckets if b.deletion == "pending"]
+    
+    if pending_creations or pending_deletions:
         try:
             async with httpx.AsyncClient(
                 auth=(cfg.username, cfg.password),
@@ -510,24 +514,32 @@ async def list_s3_buckets(
                     data = response.json()
                     netapp_records = data.get("records", [])
                     
-                    # Sweep NetApp records
-                    for record in netapp_records:
-                        target_svm = record.get("svm", {}).get("name", "")
-                        if target_svm != cfg.svm_name:
-                            continue
+                    active_environment_buckets = [
+                        r for r in netapp_records 
+                        if r.get("svm", {}).get("name", "") == cfg.svm_name
+                    ]
+                    active_uuids = {r.get("uuid") for r in active_environment_buckets}
+                    
+                    # Resolve Pending Creations
+                    for p in pending_creations:
+                        match = next((r for r in active_environment_buckets if r.get("name") == p.name), None)
+                        if match:
+                            update_s3_bucket_uuid(db, p.id, match.get("uuid"))
+                            p.bucket_uuid = match.get("uuid")
                             
-                        # If a pending SQLite bucket structurally maps to something NetApp confirms exists
-                        for p in pending_buckets:
-                            if p.name == record.get("name") and p.bucket_uuid == "pending":
-                                update_s3_bucket_uuid(db, p.id, record.get("uuid"))
-                                p.bucket_uuid = record.get("uuid")
+                    # Resolve Pending Deletions
+                    for p in pending_deletions:
+                        if p.bucket_uuid not in active_uuids:
+                            timestamp = datetime.utcnow().isoformat()
+                            mark_s3_bucket_deleted(db, p.id, timestamp)
+                            p.deletion = timestamp
 
         except Exception as e:
-            # We don't want a network block to break the entire dashboard. Just log and gracefully degrade.
             print(f"Bucket Async Resolution Failed: {str(e)}")
-            pass
 
-    return S3BucketListResponse(data=db_buckets)
+    # Filter out heavily timestamped buckets representing completed background deletes natively from the array
+    filtered_buckets = [b for b in db_buckets if b.deletion in (None, "pending")]
+    return S3BucketListResponse(data=filtered_buckets)
 
 
 @app.get("/api/s3/buckets/{bucket_uuid}")
@@ -590,6 +602,9 @@ async def delete_s3_bucket_route(
     if not target_bucket:
         raise HTTPException(status_code=404, detail="Bucket tracking not found or you lack ownership permissions.")
 
+    if target_bucket.deletion == "pending":
+        raise HTTPException(status_code=400, detail="Bucket is already queued for background deletion natively.")
+
     cfg = _get_svm_or_404(environment)
     netapp_url = f"{cfg.base_url}/protocols/s3/buckets/{cfg.svm_uuid}/{bucket_uuid}"
 
@@ -611,11 +626,11 @@ async def delete_s3_bucket_route(
             detail="NetApp blocked bucket deletion! Ensure the bucket is entirely empty of objects before deleting."
         )
         
-    if response.status_code not in (200, 204, 404):
+    if response.status_code not in (200, 204, 404, 202):
         raise HTTPException(status_code=502, detail=f"NetApp SVM API returned {response.status_code}: {response.text}")
 
-    # 3. Synchronize local storage wipe
-    delete_s3_bucket(db, current_user, environment, bucket_uuid)
+    # 3. Synchronize local storage to a pending deletion sweep state
+    mark_s3_bucket_deleting(db, current_user, environment, bucket_uuid)
     return None
 
 
