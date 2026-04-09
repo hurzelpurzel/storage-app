@@ -126,4 +126,35 @@ export const s3UsersApi = {
   },
 };
 
+// S3 Bucket Management API
+export const s3BucketsApi = {
+  // Create a new S3 bucket via the NetApp SVM API.
+  createBucket: async (environment, name) => {
+    const response = await api.post('/s3/buckets', { environment, name });
+    return response.data;
+  },
+
+  // List asynchronously tracked buckets
+  listBuckets: async (environment) => {
+    const response = await api.get('/s3/buckets', { params: { environment } });
+    return response.data;
+  },
+
+  // Proxy fetch granular JSON payload
+  getBucketDetails: async (environment, bucketUuid) => {
+    const encEnv = encodeURIComponent(environment);
+    const encUuid = encodeURIComponent(bucketUuid);
+    const response = await api.get(`/s3/buckets/${encUuid}?environment=${encEnv}`);
+    return response.data;
+  },
+
+  // Delete bucket natively from SVM utilizing bucket_uuid
+  deleteBucket: async (environment, bucketUuid) => {
+    const encEnv = encodeURIComponent(environment);
+    const encUuid = encodeURIComponent(bucketUuid);
+    const response = await api.delete(`/s3/buckets/${encUuid}?environment=${encEnv}`);
+    return response.data;
+  },
+};
+
 export default api;

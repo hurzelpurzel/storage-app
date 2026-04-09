@@ -13,21 +13,21 @@ class SvmConfig(BaseModel):
     username: str
     password: str
     svm_uuid: str    # UUID used in NetApp API paths
-
+    svm_name: str    # Target local SVM instance name
 
 def _parse_svm_env(raw: Optional[str], slot: int) -> Optional[SvmConfig]:
     """
     Parse a comma-separated SVM config string of the form:
-      <name>,<base_url>,<username>,<password>,<svm_uuid>
+      <name>,<base_url>,<username>,<password>,<svm_uuid>,<svm_name>
     Returns None (and logs a warning) if the value is missing or malformed.
     """
     if not raw:
         return None
     parts = [p.strip() for p in raw.split(",")]
-    if len(parts) != 5:
+    if len(parts) != 6:
         logger.warning(
-            "NETAPP_ENV_%d is malformed — expected 5 comma-separated fields "
-            "(name,base_url,username,password,svm_uuid), got %d. Ignoring.",
+            "NETAPP_ENV_%d is malformed — expected 6 comma-separated fields "
+            "(name,base_url,username,password,svm_uuid,svm_name), got %d. Ignoring.",
             slot, len(parts),
         )
         return None
@@ -37,6 +37,7 @@ def _parse_svm_env(raw: Optional[str], slot: int) -> Optional[SvmConfig]:
         username=parts[2],
         password=parts[3],
         svm_uuid=parts[4],
+        svm_name=parts[5],
     )
 
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import UserManagement from './UserManagement';
+import BucketManagement from './BucketManagement';
 import AuthBar from './AuthBar';
 import { s3EnvironmentsApi } from '../services/api';
 
@@ -130,13 +131,7 @@ const S3ObjectStorage = ({ onBack }) => {
           )}
 
           {activeSection === 'bucket-management' && (
-            <div style={styles.placeholder}>
-              <div style={styles.placeholderIcon}>🪣</div>
-              <h2 style={styles.placeholderTitle}>Bucket Management</h2>
-              <p style={styles.placeholderText}>
-                This section is not yet implemented.
-              </p>
-            </div>
+            <BucketManagement environment={selectedEnv} />
           )}
         </main>
       </div>

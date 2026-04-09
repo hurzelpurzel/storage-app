@@ -8,12 +8,13 @@ from .models import StorageItemCreate, StorageItemUpdate
 
 def get_storage_items(
     db: Session, 
+    owner_email: str,
     page: int = 1, 
     limit: int = 20, 
     category: Optional[str] = None
 ):
     """Get storage items with pagination and optional filtering"""
-    query = db.query(StorageItem)
+    query = db.query(StorageItem).filter(StorageItem.owner_email == owner_email)
     
     if category:
         query = query.filter(StorageItem.category == category)
@@ -44,9 +45,9 @@ def get_storage_items(
         }
     }
 
-def get_storage_item(db: Session, item_id: str):
+def get_storage_item(db: Session, item_id: str, owner_email: str):
     """Get a single storage item by ID"""
-    item = db.query(StorageItem).filter(StorageItem.id == item_id).first()
+    item = db.query(StorageItem).filter(StorageItem.id == item_id, StorageItem.owner_email == owner_email).first()
     if item and item.tags:
         try:
             item.tags = json.loads(item.tags)
@@ -56,12 +57,13 @@ def get_storage_item(db: Session, item_id: str):
         item.tags = []
     return item
 
-def create_storage_item(db: Session, item: StorageItemCreate):
+def create_storage_item(db: Session, item: StorageItemCreate, owner_email: str):
     """Create a new storage item"""
     # Convert tags list to JSON string for storage
     tags_json = json.dumps(item.tags) if item.tags else None
     
     db_item = StorageItem(
+        owner_email=owner_email,
         name=item.name,
         description=item.description,
         category=item.category,
@@ -86,9 +88,9 @@ def create_storage_item(db: Session, item: StorageItemCreate):
     
     return db_item
 
-def update_storage_item(db: Session, item_id: str, item_update: StorageItemUpdate):
+def update_storage_item(db: Session, item_id: str, item_update: StorageItemUpdate, owner_email: str):
     """Update an existing storage item"""
-    db_item = db.query(StorageItem).filter(StorageItem.id == item_id).first()
+    db_item = db.query(StorageItem).filter(StorageItem.id == item_id, StorageItem.owner_email == owner_email).first()
     if not db_item:
         return None
     
@@ -116,9 +118,9 @@ def update_storage_item(db: Session, item_id: str, item_update: StorageItemUpdat
     
     return db_item
 
-def delete_storage_item(db: Session, item_id: str):
+def delete_storage_item(db: Session, item_id: str, owner_email: str):
     """Delete a storage item"""
-    db_item = db.query(StorageItem).filter(StorageItem.id == item_id).first()
+    db_item = db.query(StorageItem).filter(StorageItem.id == item_id, StorageItem.owner_email == owner_email).first()
     if db_item:
         db.delete(db_item)
         db.commit()
@@ -181,6 +183,56 @@ def delete_s3_user(db: Session, owner_email: str, environment: str, username: st
     )
     if db_user:
         db.delete(db_user)
+        db.commit()
+        return True
+    return False
+
+# ---------------------------------------------------------------------------
+# S3 Bucket CRUD
+# ---------------------------------------------------------------------------
+
+def get_s3_buckets(db: Session, owner_email: str, environment: Optional[str] = None):
+    from .database import S3Bucket
+    query = db.query(S3Bucket).filter(S3Bucket.owner_email == owner_email)
+    if environment:
+        query = query.filter(S3Bucket.environment == environment)
+    return query.order_by(S3Bucket.created_at).all()
+
+def create_s3_bucket(db: Session, owner_email: str, environment: str, name: str):
+    from .database import S3Bucket
+    db_bucket = S3Bucket(
+        owner_email=owner_email,
+        environment=environment,
+        name=name,
+        bucket_uuid="pending"
+    )
+    db.add(db_bucket)
+    db.commit()
+    db.refresh(db_bucket)
+    return db_bucket
+
+def update_s3_bucket_uuid(db: Session, bucket_id: str, new_uuid: str):
+    from .database import S3Bucket
+    db_bucket = db.query(S3Bucket).filter(S3Bucket.id == bucket_id).first()
+    if db_bucket:
+        db_bucket.bucket_uuid = new_uuid
+        db.commit()
+        db.refresh(db_bucket)
+    return db_bucket
+
+def delete_s3_bucket(db: Session, owner_email: str, environment: str, bucket_uuid: str) -> bool:
+    from .database import S3Bucket
+    db_bucket = (
+        db.query(S3Bucket)
+        .filter(
+            S3Bucket.owner_email == owner_email, 
+            S3Bucket.environment == environment, 
+            S3Bucket.bucket_uuid == bucket_uuid
+        )
+        .first()
+    )
+    if db_bucket:
+        db.delete(db_bucket)
         db.commit()
         return True
     return False

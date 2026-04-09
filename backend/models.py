@@ -25,7 +25,9 @@ class StorageItemUpdate(BaseModel):
     tags: Optional[List[str]] = None
 
 class StorageItem(StorageItemBase):
+    """Schema for returning a storage item, including generated fields."""
     id: str
+    owner_email: str
     created_at: datetime
     updated_at: datetime
 
@@ -81,6 +83,33 @@ class S3UserCreateResponse(S3User):
 
 class S3UserListResponse(BaseModel):
     data: List[S3User]
+
+
+# ---------------------------------------------------------------------------
+# S3 Bucket models
+# ---------------------------------------------------------------------------
+
+class S3BucketCreate(BaseModel):
+    """Request body for creating a new S3 bucket via the NetApp SVM API."""
+    environment: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class S3BucketSchema(BaseModel):
+    """Locally persisted representation of an S3 Bucket containing asynchronous tracking UUIDs."""
+    id: str
+    owner_email: str
+    environment: str
+    name: str
+    bucket_uuid: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class S3BucketListResponse(BaseModel):
+    data: List[S3BucketSchema]
 
 
 # ---------------------------------------------------------------------------

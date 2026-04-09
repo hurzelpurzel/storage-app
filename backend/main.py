@@ -12,14 +12,16 @@ from .config import settings, SvmConfig
 from .database import get_db, create_tables
 from .models import (
     StorageItem, StorageItemCreate, StorageItemUpdate,
+    StorageItem, StorageItemCreate, StorageItemUpdate,
     StorageItemListResponse, ErrorResponse,
     S3UserCreate, S3User as S3UserSchema, S3UserCreateResponse, S3UserListResponse,
-    SvmEnvironment, SvmEnvironmentsResponse,
+    SvmEnvironment, SvmEnvironmentsResponse, S3BucketCreate, S3BucketSchema, S3BucketListResponse,
 )
 from .crud import (
     get_storage_items, get_storage_item, create_storage_item,
     update_storage_item, delete_storage_item,
     get_s3_users, get_s3_user_by_username, create_s3_user, delete_s3_user,
+    get_s3_buckets, create_s3_bucket, update_s3_bucket_uuid, delete_s3_bucket,
 )
 from .auth import get_current_user_optional, get_current_user_required, get_entra_auth_url, verify_entra_token, create_access_token
 
@@ -116,7 +118,7 @@ async def list_storage_items(
 ):
     """List all storage items with optional pagination and filtering"""
     try:
-        result = get_storage_items(db, page=page, limit=limit, category=category)
+        result = get_storage_items(db, owner_email=current_user, page=page, limit=limit, category=category)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -134,7 +136,7 @@ async def create_new_storage_item(
 ):
     """Create a new storage item"""
     try:
-        return create_storage_item(db, item)
+        return create_storage_item(db, item, owner_email=current_user)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -149,7 +151,7 @@ async def get_storage_item_by_id(
     current_user = Depends(get_current_user_required())
 ):
     """Get a storage item by ID"""
-    item = get_storage_item(db, item_id)
+    item = get_storage_item(db, item_id, owner_email=current_user)
     if not item:
         raise HTTPException(status_code=404, detail="Storage item not found")
     return item
@@ -166,7 +168,7 @@ async def update_storage_item_by_id(
     current_user = Depends(get_current_user_required())
 ):
     """Update a storage item"""
-    updated_item = update_storage_item(db, item_id, item_update)
+    updated_item = update_storage_item(db, item_id, item_update, owner_email=current_user)
     if not updated_item:
         raise HTTPException(status_code=404, detail="Storage item not found")
     return updated_item
@@ -182,7 +184,7 @@ async def delete_storage_item_by_id(
     current_user = Depends(get_current_user_required())
 ):
     """Delete a storage item"""
-    deleted = delete_storage_item(db, item_id)
+    deleted = delete_storage_item(db, item_id, owner_email=current_user)
     if not deleted:
         raise HTTPException(status_code=404, detail="Storage item not found")
 
@@ -435,6 +437,185 @@ async def delete_s3_user_route(
 
     # 3. Synchronize local storage wipe
     delete_s3_user(db, current_user, environment, username)
+    return None
+
+@app.post("/api/s3/buckets", status_code=201, response_model=S3BucketSchema)
+async def create_new_s3_bucket(
+    payload: S3BucketCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    """
+    Create a new S3 bucket on the NetApp SVM and track it locally.
+    """
+    # Guard against duplicate active names inside this environment natively
+    active_buckets = get_s3_buckets(db, current_user, payload.environment)
+    if any(b.name == payload.name for b in active_buckets):
+        raise HTTPException(status_code=409, detail="Bucket tracking name already localized to this environment.")
+
+    cfg = _get_svm_or_404(payload.environment)
+    netapp_url = f"{cfg.base_url}/protocols/s3/buckets"
+    
+    netapp_body = {
+        "name": payload.name,
+        "svm": {
+            "name": cfg.svm_name
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            auth=(cfg.username, cfg.password),
+            verify=settings.netapp_verify_ssl,
+            timeout=30,
+        ) as client:
+            response = await client.post(
+                netapp_url,
+                json=netapp_body,
+                headers=_netapp_headers(),
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach NetApp SVM API: {exc}")
+
+    if response.status_code not in (200, 201, 202):
+        raise HTTPException(status_code=502, detail=f"NetApp SVM API returned {response.status_code}: {response.text}")
+
+    # Immediately lock async representation into database proxy
+    db_bucket = create_s3_bucket(db, current_user, payload.environment, payload.name)
+    return db_bucket
+
+
+@app.get("/api/s3/buckets", response_model=S3BucketListResponse)
+async def list_s3_buckets(
+    environment: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    """
+    Fetch S3 buckets for the environment, explicitly resolving pending async buckets from NetApp.
+    """
+    cfg = _get_svm_or_404(environment)
+    db_buckets = get_s3_buckets(db, current_user, environment)
+
+    pending_buckets = [b for b in db_buckets if b.bucket_uuid == "pending"]
+    if pending_buckets:
+        try:
+            async with httpx.AsyncClient(
+                auth=(cfg.username, cfg.password),
+                verify=settings.netapp_verify_ssl,
+                timeout=30,
+            ) as client:
+                response = await client.get(f"{cfg.base_url}/protocols/s3/buckets", headers=_netapp_headers())
+                if response.status_code == 200:
+                    data = response.json()
+                    netapp_records = data.get("records", [])
+                    
+                    # Sweep NetApp records
+                    for record in netapp_records:
+                        target_svm = record.get("svm", {}).get("name", "")
+                        if target_svm != cfg.svm_name:
+                            continue
+                            
+                        # If a pending SQLite bucket structurally maps to something NetApp confirms exists
+                        for p in pending_buckets:
+                            if p.name == record.get("name") and p.bucket_uuid == "pending":
+                                update_s3_bucket_uuid(db, p.id, record.get("uuid"))
+                                p.bucket_uuid = record.get("uuid")
+
+        except Exception as e:
+            # We don't want a network block to break the entire dashboard. Just log and gracefully degrade.
+            print(f"Bucket Async Resolution Failed: {str(e)}")
+            pass
+
+    return S3BucketListResponse(data=db_buckets)
+
+
+@app.get("/api/s3/buckets/{bucket_uuid}")
+async def get_s3_bucket_details(
+    bucket_uuid: str,
+    environment: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    """
+    Fetch comprehensive raw JSON configuration details for a given bucket UUID from NetApp.
+    """
+    if bucket_uuid == "pending":
+        raise HTTPException(status_code=400, detail="Cannot fetch details for a pending UUID bucket.")
+
+    # 1. Enforce local environment boundaries
+    db_buckets = get_s3_buckets(db, current_user, environment)
+    target_bucket = next((b for b in db_buckets if b.bucket_uuid == bucket_uuid), None)
+    if not target_bucket:
+        raise HTTPException(status_code=404, detail="Bucket tracking not found or you lack ownership permissions.")
+
+    cfg = _get_svm_or_404(environment)
+    netapp_url = f"{cfg.base_url}/protocols/s3/buckets/{cfg.svm_uuid}/{bucket_uuid}"
+
+    try:
+        async with httpx.AsyncClient(
+            auth=(cfg.username, cfg.password),
+            verify=settings.netapp_verify_ssl,
+            timeout=30,
+        ) as client:
+            response = await client.get(netapp_url, headers=_netapp_headers())
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach NetApp SVM API: {exc}")
+
+    if response.status_code not in (200,):
+        raise HTTPException(status_code=502, detail=f"NetApp SVM API returned {response.status_code}: {response.text}")
+
+    return response.json()
+
+
+@app.delete("/api/s3/buckets/{bucket_uuid}", status_code=204)
+async def delete_s3_bucket_route(
+    bucket_uuid: str,
+    environment: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    """
+    Delete an S3 bucket off NetApp targeting its active UUID string.
+    """
+    if bucket_uuid == "pending":
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete a bucket that is actively resolving its UUID. Please refresh the grid."
+        )
+
+    # 1. Enforce local environment boundaries
+    db_buckets = get_s3_buckets(db, current_user, environment)
+    target_bucket = next((b for b in db_buckets if b.bucket_uuid == bucket_uuid), None)
+    if not target_bucket:
+        raise HTTPException(status_code=404, detail="Bucket tracking not found or you lack ownership permissions.")
+
+    cfg = _get_svm_or_404(environment)
+    netapp_url = f"{cfg.base_url}/protocols/s3/buckets/{cfg.svm_uuid}/{bucket_uuid}"
+
+    # 2. Fire the network cancellation command to SVM
+    try:
+        async with httpx.AsyncClient(
+            auth=(cfg.username, cfg.password),
+            verify=settings.netapp_verify_ssl,
+            timeout=30,
+        ) as client:
+            response = await client.delete(netapp_url, headers=_netapp_headers())
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach NetApp SVM API: {exc}")
+
+    # NetApp physically blocked deletion, likely because the bucket still actively houses file objects!
+    if response.status_code == 400:
+        raise HTTPException(
+            status_code=400,
+            detail="NetApp blocked bucket deletion! Ensure the bucket is entirely empty of objects before deleting."
+        )
+        
+    if response.status_code not in (200, 204, 404):
+        raise HTTPException(status_code=502, detail=f"NetApp SVM API returned {response.status_code}: {response.text}")
+
+    # 3. Synchronize local storage wipe
+    delete_s3_bucket(db, current_user, environment, bucket_uuid)
     return None
 
 
