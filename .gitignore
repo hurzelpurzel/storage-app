@@ -1,5 +1,7 @@
 # Python
 __pycache__/
+backend/__pycache__/
+storage_app.db
 *.py[cod]
 *$py.class
 *.so

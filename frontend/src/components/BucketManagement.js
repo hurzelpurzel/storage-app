@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { s3BucketsApi } from '../services/api';
+import AccessManagementModal from './AccessManagementModal';
 
 const BucketManagement = ({ environment }) => {
   const [buckets, setBuckets] = useState([]);
@@ -13,6 +14,10 @@ const BucketManagement = ({ environment }) => {
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [activeDetailsPayload, setActiveDetailsPayload] = useState(null);
+  
+  // Access Orchestration hooks
+  const [accessModalOpen, setAccessModalOpen] = useState(false);
+  const [targetAccessBucket, setTargetAccessBucket] = useState({ uuid: null, name: null });
 
   useEffect(() => {
     if (environment) loadBuckets();
@@ -204,17 +209,29 @@ const BucketManagement = ({ environment }) => {
                       {formatDate(b.created_at)}
                     </td>
                     <td style={styles.td}>
-                      {isDeleting ? (
-                         <span style={styles.deletingBadge}>Deleting...</span>
-                      ) : (
-                         <button
-                           style={isPending ? styles.deleteButtonDisabled : styles.deleteButton}
-                           onClick={() => handleDeleteBucket(b.bucket_uuid, b.name)}
-                           disabled={isPending}
-                         >
-                           Delete
-                         </button>
-                      )}
+                      <div style={styles.actionButtonGroup}>
+                          {isDeleting ? (
+                             <span style={styles.deletingBadge}>Deleting...</span>
+                          ) : (
+                             <button
+                               style={isPending ? styles.deleteButtonDisabled : styles.deleteButton}
+                               onClick={() => handleDeleteBucket(b.bucket_uuid, b.name)}
+                               disabled={isPending}
+                             >
+                               Delete
+                             </button>
+                          )}
+                          <button
+                            style={isPending || isDeleting ? styles.manageButtonDisabled : styles.manageButton}
+                            onClick={() => {
+                                setTargetAccessBucket({ uuid: b.bucket_uuid, name: b.name });
+                                setAccessModalOpen(true);
+                            }}
+                            disabled={isPending || isDeleting}
+                          >
+                            Manage Access
+                          </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -223,6 +240,15 @@ const BucketManagement = ({ environment }) => {
           </table>
         </div>
       )}
+
+      {/* IAM Access Overlay Modal */}
+      <AccessManagementModal
+        isOpen={accessModalOpen}
+        onClose={() => setAccessModalOpen(false)}
+        bucketUuid={targetAccessBucket.uuid}
+        bucketName={targetAccessBucket.name}
+        environment={environment}
+      />
 
       {/* JSON Modal Overlay */}
       {detailsModalOpen && (
@@ -418,6 +444,32 @@ const styles = {
     fontSize: '12px',
     fontWeight: '600',
     fontStyle: 'italic',
+  },
+  actionButtonGroup: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+  },
+  manageButton: {
+    padding: '4px 10px',
+    backgroundColor: '#eff6ff',
+    color: '#3b82f6',
+    border: '1px solid #bfdbfe',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: '600',
+    transition: 'all 0.2s',
+  },
+  manageButtonDisabled: {
+    padding: '4px 10px',
+    backgroundColor: '#f8fafc',
+    color: '#94a3b8',
+    border: '1px solid #e2e8f0',
+    borderRadius: '4px',
+    cursor: 'not-allowed',
+    fontSize: '12px',
+    fontWeight: '600',
   },
   deleteButton: {
     padding: '4px 10px',

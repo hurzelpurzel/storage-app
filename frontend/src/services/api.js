@@ -148,6 +148,21 @@ export const s3BucketsApi = {
     return response.data;
   },
 
+  // Orchestrate dynamic Identity IAM mappings
+  getBucketAccess: async (environment, bucketUuid) => {
+    const encEnv = encodeURIComponent(environment);
+    const encUuid = encodeURIComponent(bucketUuid);
+    const response = await api.get(`/s3/buckets/${encUuid}/access?environment=${encEnv}`);
+    return response.data;
+  },
+
+  updateBucketAccess: async (environment, bucketUuid, payload) => {
+    const encEnv = encodeURIComponent(environment);
+    const encUuid = encodeURIComponent(bucketUuid);
+    const response = await api.put(`/s3/buckets/${encUuid}/access?environment=${encEnv}`, payload);
+    return response.data;
+  },
+
   // Delete bucket natively from SVM utilizing bucket_uuid
   deleteBucket: async (environment, bucketUuid) => {
     const encEnv = encodeURIComponent(environment);

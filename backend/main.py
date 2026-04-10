@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import os
 import httpx
 
@@ -482,6 +482,36 @@ async def create_new_s3_bucket(
     if response.status_code not in (200, 201, 202):
         raise HTTPException(status_code=502, detail=f"NetApp SVM API returned {response.status_code}: {response.text}")
 
+    # Fire background Generation for IAM Policies natively bridging this Bucket
+    try:
+        async with httpx.AsyncClient(
+            auth=(cfg.username, cfg.password),
+            verify=settings.netapp_verify_ssl,
+            timeout=30,
+        ) as client:
+            full_access_payload = {
+                "name": f"FullAccess_{payload.name}",
+                "statements": [{
+                    "effect": "allow",
+                    "actions": ["*"],
+                    "resources": [payload.name, f"{payload.name}/*"]
+                }]
+            }
+            read_only_payload = {
+                "name": f"ReadOnly_{payload.name}",
+                "statements": [{
+                    "effect": "allow",
+                    "actions": ["GetObject", "ListBucket"],
+                    "resources": [payload.name, f"{payload.name}/*"]
+                }]
+            }
+            policy_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/policies"
+            # We don't block the frontend heavily if these fail, but we'll try natively hooking them
+            await client.post(policy_url, json=full_access_payload, headers=_netapp_headers())
+            await client.post(policy_url, json=read_only_payload, headers=_netapp_headers())
+    except Exception as e:
+        print(f"Failed generating Policies automatically behind the scenes for bucket {payload.name}: {e}")
+
     # Immediately lock async representation into database proxy
     db_bucket = create_s3_bucket(db, current_user, payload.environment, payload.name)
     return db_bucket
@@ -580,6 +610,93 @@ async def get_s3_bucket_details(
     return response.json()
 
 
+class ObjectAccessUpdate(BaseModel):
+    username: str
+    access: str # "none", "read", "full"
+
+@app.get("/api/s3/buckets/{bucket_uuid}/access")
+async def get_bucket_access(
+    bucket_uuid: str,
+    environment: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    target_bucket = db.query(S3Bucket).filter(S3Bucket.bucket_uuid == bucket_uuid, S3Bucket.owner_email == current_user, S3Bucket.environment == environment).first()
+    if not target_bucket: raise HTTPException(status_code=404, detail="Bucket not found.")
+
+    all_users = get_s3_users(db, current_user, environment)
+    cfg = _get_svm_or_404(environment)
+    
+    full_users = []
+    read_users = []
+    
+    try:
+        async with httpx.AsyncClient(auth=(cfg.username, cfg.password), verify=settings.netapp_verify_ssl, timeout=30) as client:
+            res = await client.get(f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups?fields=users", headers=_netapp_headers())
+            if res.status_code == 200:
+                for grp in res.json().get("records", []):
+                    if grp.get("name") == f"GrpFullAccess_{target_bucket.name}":
+                        full_users = [u.get("name") for u in grp.get("users", [])]
+                    elif grp.get("name") == f"GrpReadOnly_{target_bucket.name}":
+                        read_users = [u.get("name") for u in grp.get("users", [])]
+    except Exception as e:
+        print(f"Failed pulling groups dynamically: {e}")
+        
+    res_list = []
+    for u in all_users:
+        act = "none"
+        if u.username in full_users: act = "full"
+        elif u.username in read_users: act = "read"
+        res_list.append({"username": u.username, "access": act})
+        
+    return {"access_list": res_list}
+
+
+@app.put("/api/s3/buckets/{bucket_uuid}/access")
+async def update_bucket_access(
+    bucket_uuid: str,
+    payload: List[ObjectAccessUpdate],
+    environment: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_required()),
+):
+    target_bucket = db.query(S3Bucket).filter(S3Bucket.bucket_uuid == bucket_uuid, S3Bucket.owner_email == current_user, S3Bucket.environment == environment).first()
+    if not target_bucket: raise HTTPException(status_code=404, detail="Bucket not found.")
+    cfg = _get_svm_or_404(environment)
+    
+    desired_full = [{"name": p.username} for p in payload if p.access == "full"]
+    desired_read = [{"name": p.username} for p in payload if p.access == "read"]
+    
+    async def manage_dynamic_group(grp_name, policy_name, desired_users, client):
+        group_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups"
+        
+        # 1. Sweep active
+        active_id = None
+        current_users = []
+        res = await client.get(f"{group_url}?name={grp_name}&fields=users", headers=_netapp_headers())
+        if res.status_code == 200 and res.json().get("records"):
+            active_id = res.json()["records"][0].get("id")
+            current_users = res.json()["records"][0].get("users", [])
+            
+        # 2. Logic loop
+        if not desired_users:
+            if active_id:
+                await client.delete(f"{group_url}/{active_id}", headers=_netapp_headers())
+        else:
+            if not active_id:
+                await client.post(group_url, json={"name": grp_name, "policies": [{"name": policy_name}], "users": desired_users}, headers=_netapp_headers())
+            else:
+                await client.patch(f"{group_url}/{active_id}", json={"users": desired_users}, headers=_netapp_headers())
+
+    try:
+        async with httpx.AsyncClient(auth=(cfg.username, cfg.password), verify=settings.netapp_verify_ssl, timeout=30) as client:
+            await manage_dynamic_group(f"GrpFullAccess_{target_bucket.name}", f"FullAccess_{target_bucket.name}", desired_full, client)
+            await manage_dynamic_group(f"GrpReadOnly_{target_bucket.name}", f"ReadOnly_{target_bucket.name}", desired_read, client)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed updating dynamically scaled proxies natively: {e}")
+        
+    return {"message": "Access successfully pushed"}
+    
 @app.delete("/api/s3/buckets/{bucket_uuid}", status_code=204)
 async def delete_s3_bucket_route(
     bucket_uuid: str,
@@ -615,6 +732,30 @@ async def delete_s3_bucket_route(
             verify=settings.netapp_verify_ssl,
             timeout=30,
         ) as client:
+            # 2a: Scrape and physically destroy orphaned proxy Groups dynamically to allow ONTAP to drop the policies cleanly
+            try:
+                group_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups"
+                res = await client.get(group_url, headers=_netapp_headers())
+                if res.status_code == 200:
+                    grps = res.json().get("records", [])
+                    for g in grps:
+                        gname = g.get("name", "")
+                        if gname in (f"GrpFullAccess_{target_bucket.name}", f"GrpReadOnly_{target_bucket.name}"):
+                            gid = g.get("id")
+                            if gid:
+                                await client.delete(f"{group_url}/{gid}", headers=_netapp_headers())
+            except Exception as e:
+                print(f"Silently failed dropping dynamic groups during bucket wipe: {e}")
+
+            # 2b: Drop the explicitly mapped static Policies
+            try:
+                policy_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/policies"
+                await client.delete(f"{policy_url}/FullAccess_{target_bucket.name}", headers=_netapp_headers())
+                await client.delete(f"{policy_url}/ReadOnly_{target_bucket.name}", headers=_netapp_headers())
+            except Exception as e:
+                print(f"Silently failed dropping policies during bucket wipe: {e}")
+                
+            # 2c: Execute master Bucket payload override
             response = await client.delete(netapp_url, headers=_netapp_headers())
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach NetApp SVM API: {exc}")
