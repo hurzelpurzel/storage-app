@@ -632,7 +632,7 @@ async def get_bucket_access(
     
     try:
         async with httpx.AsyncClient(auth=(cfg.username, cfg.password), verify=settings.netapp_verify_ssl, timeout=30) as client:
-            res = await client.get(f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups?fields=users", headers=_netapp_headers())
+            res = await client.get(f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups?fields=**&return_records=true", headers=_netapp_headers())
             if res.status_code == 200:
                 for grp in res.json().get("records", []):
                     if grp.get("name") == f"GrpFullAccess_{target_bucket.name}":
@@ -673,7 +673,7 @@ async def update_bucket_access(
         # 1. Sweep active
         active_id = None
         current_users = []
-        res = await client.get(f"{group_url}?name={grp_name}&fields=users", headers=_netapp_headers())
+        res = await client.get(f"{group_url}?name={grp_name}&fields=**&return_records=true", headers=_netapp_headers())
         if res.status_code == 200 and res.json().get("records"):
             active_id = res.json()["records"][0].get("id")
             current_users = res.json()["records"][0].get("users", [])
