@@ -9,7 +9,7 @@ import os
 import httpx
 
 from .config import settings, SvmConfig
-from .database import get_db, create_tables
+from .database import get_db, create_tables, S3Bucket
 from .models import (
     StorageItem, StorageItemCreate, StorageItemUpdate,
     StorageItem, StorageItemCreate, StorageItemUpdate,
