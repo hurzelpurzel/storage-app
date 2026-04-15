@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Query, status
+from fastapi import FastAPI, HTTPException, Depends, Query, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -453,9 +453,36 @@ async def delete_s3_user_route(
     delete_s3_user(db, current_user, environment, username)
     return None
 
+async def create_bucket_policies_async(cfg: SvmConfig, bucket_name: str):
+    import asyncio
+    policy_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/policies"
+    full_access_payload = {
+        "name": f"FullAccess_{bucket_name}",
+        "statements": [{"effect": "allow", "actions": ["*"], "resources": [bucket_name, f"{bucket_name}/*"]}]
+    }
+    read_only_payload = {
+        "name": f"ReadOnly_{bucket_name}",
+        "statements": [{"effect": "allow", "actions": ["GetObject", "ListBucket"], "resources": [bucket_name, f"{bucket_name}/*"]}]
+    }
+    
+    # Retry up to 15 times (~30 seconds) because bucket creation on NetApp can be asynchronous
+    for attempt in range(15):
+        await asyncio.sleep(2)
+        try:
+            async with get_netapp_client(cfg, timeout=30) as client:
+                res1 = await client.post(policy_url, json=full_access_payload, headers=_netapp_headers())
+                res2 = await client.post(policy_url, json=read_only_payload, headers=_netapp_headers())
+                if res1.status_code in (200, 201) and res2.status_code in (200, 201):
+                    # Successfully created policies!
+                    return
+        except Exception:
+            pass
+
+
 @app.post("/api/s3/buckets", status_code=201, response_model=S3BucketSchema)
 async def create_new_s3_bucket(
     payload: S3BucketCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user_required()),
 ):
@@ -491,30 +518,7 @@ async def create_new_s3_bucket(
         raise HTTPException(status_code=502, detail=f"NetApp SVM API returned {response.status_code}: {response.text}")
 
     # Fire background Generation for IAM Policies natively bridging this Bucket
-    try:
-        async with get_netapp_client(cfg, timeout=30) as client:
-            full_access_payload = {
-                "name": f"FullAccess_{payload.name}",
-                "statements": [{
-                    "effect": "allow",
-                    "actions": ["*"],
-                    "resources": [payload.name, f"{payload.name}/*"]
-                }]
-            }
-            read_only_payload = {
-                "name": f"ReadOnly_{payload.name}",
-                "statements": [{
-                    "effect": "allow",
-                    "actions": ["GetObject", "ListBucket"],
-                    "resources": [payload.name, f"{payload.name}/*"]
-                }]
-            }
-            policy_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/policies"
-            # We don't block the frontend heavily if these fail, but we'll try natively hooking them
-            await client.post(policy_url, json=full_access_payload, headers=_netapp_headers())
-            await client.post(policy_url, json=read_only_payload, headers=_netapp_headers())
-    except Exception as e:
-        print(f"Failed generating Policies automatically behind the scenes for bucket {payload.name}: {e}")
+    background_tasks.add_task(create_bucket_policies_async, cfg, payload.name)
 
     # Immediately lock async representation into database proxy
     db_bucket = create_s3_bucket(db, current_user, payload.environment, payload.name)
