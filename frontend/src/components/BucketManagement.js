@@ -222,14 +222,15 @@ const BucketManagement = ({ environment }) => {
                              </button>
                           )}
                           <button
-                            style={isPending || isDeleting ? styles.manageButtonDisabled : styles.manageButton}
+                            style={isPending || isDeleting || !b.policies_ready ? styles.manageButtonDisabled : styles.manageButton}
                             onClick={() => {
                                 setTargetAccessBucket({ uuid: b.bucket_uuid, name: b.name });
                                 setAccessModalOpen(true);
                             }}
-                            disabled={isPending || isDeleting}
+                            disabled={isPending || isDeleting || !b.policies_ready}
+                            title={!b.policies_ready ? "Security groups are still provisioning..." : "Manage bucket permissions"}
                           >
-                            Manage Access
+                            {!b.policies_ready ? 'Provisioning...' : 'Manage Access'}
                           </button>
                       </div>
                     </td>

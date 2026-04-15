@@ -453,6 +453,9 @@ async def delete_s3_user_route(
     delete_s3_user(db, current_user, environment, username)
     return None
 
+# In-memory tracking array for S3 buckets currently undergoing asynchronous policy generation
+pending_policy_buckets: set = set()
+
 async def create_bucket_policies_async(cfg: SvmConfig, bucket_name: str):
     import asyncio
     policy_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/policies"
@@ -468,26 +471,29 @@ async def create_bucket_policies_async(cfg: SvmConfig, bucket_name: str):
     if settings.trace_mode:
         print(f"\\n[BACKGROUND] Queued asynchronous policy generation for bucket '{bucket_name}'. Waiting for bucket to materialize...")
 
-    # Retry up to 15 times (~30 seconds) because bucket creation on NetApp can be asynchronous
-    for attempt in range(15):
-        await asyncio.sleep(2)
-        try:
-            async with get_netapp_client(cfg, timeout=30) as client:
-                res1 = await client.post(policy_url, json=full_access_payload, headers=_netapp_headers())
-                res2 = await client.post(policy_url, json=read_only_payload, headers=_netapp_headers())
-                if res1.status_code in (200, 201) and res2.status_code in (200, 201):
-                    if settings.trace_mode:
-                        print(f"[BACKGROUND] Successfully linked policies for bucket '{bucket_name}' on attempt {attempt + 1}!\\n")
-                    return
-                else:
-                    if settings.trace_mode:
-                        print(f"[BACKGROUND] Attempt {attempt + 1}: Policies rejected by NetApp, bucket likely still building. Retrying...")
-        except Exception as e:
-            if settings.trace_mode:
-                print(f"[BACKGROUND] Attempt {attempt + 1}: Could not reach API ({e}). Retrying...")
-                
-    if settings.trace_mode:
-        print(f"[BACKGROUND ERROR] Gave up generating policies for '{bucket_name}' after 15 loops!\\n")
+    try:
+        # Retry up to 15 times (~30 seconds) because bucket creation on NetApp can be asynchronous
+        for attempt in range(15):
+            await asyncio.sleep(2)
+            try:
+                async with get_netapp_client(cfg, timeout=30) as client:
+                    res1 = await client.post(policy_url, json=full_access_payload, headers=_netapp_headers())
+                    res2 = await client.post(policy_url, json=read_only_payload, headers=_netapp_headers())
+                    if res1.status_code in (200, 201) and res2.status_code in (200, 201):
+                        if settings.trace_mode:
+                            print(f"[BACKGROUND] Successfully linked policies for bucket '{bucket_name}' on attempt {attempt + 1}!\\n")
+                        return
+                    else:
+                        if settings.trace_mode:
+                            print(f"[BACKGROUND] Attempt {attempt + 1}: Policies rejected by NetApp, bucket likely still building. Retrying...")
+            except Exception as e:
+                if settings.trace_mode:
+                    print(f"[BACKGROUND] Attempt {attempt + 1}: Could not reach API ({e}). Retrying...")
+                    
+        if settings.trace_mode:
+            print(f"[BACKGROUND ERROR] Gave up generating policies for '{bucket_name}' after 15 loops!\\n")
+    finally:
+        pending_policy_buckets.discard(bucket_name)
 
 
 @app.post("/api/s3/buckets", status_code=201, response_model=S3BucketSchema)
@@ -530,6 +536,7 @@ async def create_new_s3_bucket(
 
     # Fire background Generation for IAM Policies natively bridging this Bucket
     background_tasks.add_task(create_bucket_policies_async, cfg, payload.name)
+    pending_policy_buckets.add(payload.name)
 
     # Immediately lock async representation into database proxy
     db_bucket = create_s3_bucket(db, current_user, payload.environment, payload.name)
@@ -583,7 +590,14 @@ async def list_s3_buckets(
             print(f"Bucket Async Resolution Failed: {str(e)}")
 
     # Filter out heavily timestamped buckets representing completed background deletes natively from the array
-    filtered_buckets = [b for b in db_buckets if b.deletion in (None, "pending")]
+    filtered_buckets = []
+    for b in db_buckets:
+        if b.deletion in (None, "pending"):
+            # Ensure native sqlalchemy models parse into schema cleanly before injecting transient data
+            schema_bucket = S3BucketSchema.model_validate(b)
+            schema_bucket.policies_ready = b.name not in pending_policy_buckets
+            filtered_buckets.append(schema_bucket)
+
     return S3BucketListResponse(data=filtered_buckets)
 
 

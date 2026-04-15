@@ -104,6 +104,7 @@ class S3BucketSchema(BaseModel):
     bucket_uuid: str
     deletion: Optional[str] = None
     created_at: datetime
+    policies_ready: bool = True
 
     class Config:
         from_attributes = True
