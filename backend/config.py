@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # Set to False to disable TLS certificate verification (e.g. self-signed certs)
     netapp_verify_ssl: bool = True
 
+    # Enable logging of raw NetApp API requests (cURL format) and responses
+    trace_mode: bool = False
+
     class Config:
         env_file = ".env"
 

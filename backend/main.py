@@ -210,6 +210,30 @@ def _netapp_headers() -> dict:
     return {"Content-Type": "application/json", "Accept": "application/json"}
 
 
+async def log_request(request: httpx.Request):
+    if settings.trace_mode:
+        command = f"curl -X {request.method} -H " + " -H ".join(f"'{k}: {v}'" for k, v in request.headers.items()) + f" '{request.url}'"
+        if request.content:
+            try:
+                command += f" -d '{request.content.decode()}'"
+            except Exception:
+                command += " -d '<binary>'"
+        print(f"\\n[TRACE] Request: {command}")
+
+async def log_response(response: httpx.Response):
+    if settings.trace_mode:
+        await response.aread()
+        print(f"[TRACE] Response {response.status_code}: {response.text}\\n")
+
+def get_netapp_client(cfg: SvmConfig, timeout: int = 30) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        auth=(cfg.username, cfg.password),
+        verify=settings.netapp_verify_ssl,
+        timeout=timeout,
+        event_hooks={'request': [log_request], 'response': [log_response]}
+    )
+
+
 # ---------------------------------------------------------------------------
 # S3 Object Storage — Environment discovery
 # ---------------------------------------------------------------------------
@@ -258,11 +282,7 @@ async def list_s3_users(
     # Refresh details from NetApp for each user (best-effort — don't fail the
     # whole list if a single NetApp call fails).
     refreshed = []
-    async with httpx.AsyncClient(
-        auth=(cfg.username, cfg.password),
-        verify=settings.netapp_verify_ssl,
-        timeout=15,
-    ) as client:
+    async with get_netapp_client(cfg, timeout=15) as client:
         for user in db_users:
             netapp_url = (
                 f"{cfg.base_url}/protocols/s3/services"
@@ -337,11 +357,7 @@ async def create_new_s3_user(
         netapp_body["comment"] = payload.comment
 
     try:
-        async with httpx.AsyncClient(
-            auth=(cfg.username, cfg.password),
-            verify=settings.netapp_verify_ssl,
-            timeout=30,
-        ) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             response = await client.post(
                 netapp_url,
                 json=netapp_body,
@@ -418,11 +434,7 @@ async def delete_s3_user_route(
 
     # 2. Fire the network cancellation command to SVM
     try:
-        async with httpx.AsyncClient(
-            auth=(cfg.username, cfg.password),
-            verify=settings.netapp_verify_ssl,
-            timeout=30,
-        ) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             response = await client.delete(netapp_url, headers=_netapp_headers())
     except httpx.RequestError as exc:
         raise HTTPException(
@@ -466,11 +478,7 @@ async def create_new_s3_bucket(
     }
 
     try:
-        async with httpx.AsyncClient(
-            auth=(cfg.username, cfg.password),
-            verify=settings.netapp_verify_ssl,
-            timeout=30,
-        ) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             response = await client.post(
                 netapp_url,
                 json=netapp_body,
@@ -484,11 +492,7 @@ async def create_new_s3_bucket(
 
     # Fire background Generation for IAM Policies natively bridging this Bucket
     try:
-        async with httpx.AsyncClient(
-            auth=(cfg.username, cfg.password),
-            verify=settings.netapp_verify_ssl,
-            timeout=30,
-        ) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             full_access_payload = {
                 "name": f"FullAccess_{payload.name}",
                 "statements": [{
@@ -534,11 +538,7 @@ async def list_s3_buckets(
     
     if pending_creations or pending_deletions:
         try:
-            async with httpx.AsyncClient(
-                auth=(cfg.username, cfg.password),
-                verify=settings.netapp_verify_ssl,
-                timeout=30,
-            ) as client:
+            async with get_netapp_client(cfg, timeout=30) as client:
                 response = await client.get(f"{cfg.base_url}/protocols/s3/buckets", headers=_netapp_headers())
                 if response.status_code == 200:
                     data = response.json()
@@ -595,11 +595,7 @@ async def get_s3_bucket_details(
     netapp_url = f"{cfg.base_url}/protocols/s3/buckets/{cfg.svm_uuid}/{bucket_uuid}"
 
     try:
-        async with httpx.AsyncClient(
-            auth=(cfg.username, cfg.password),
-            verify=settings.netapp_verify_ssl,
-            timeout=30,
-        ) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             response = await client.get(netapp_url, headers=_netapp_headers())
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach NetApp SVM API: {exc}")
@@ -631,7 +627,7 @@ async def get_bucket_access(
     read_users = []
     
     try:
-        async with httpx.AsyncClient(auth=(cfg.username, cfg.password), verify=settings.netapp_verify_ssl, timeout=30) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             res = await client.get(f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups?fields=**&return_records=true", headers=_netapp_headers())
             if res.status_code == 200:
                 for grp in res.json().get("records", []):
@@ -689,7 +685,7 @@ async def update_bucket_access(
                 await client.patch(f"{group_url}/{active_id}", json={"users": desired_users}, headers=_netapp_headers())
 
     try:
-        async with httpx.AsyncClient(auth=(cfg.username, cfg.password), verify=settings.netapp_verify_ssl, timeout=30) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             await manage_dynamic_group(f"GrpFullAccess_{target_bucket.name}", f"FullAccess_{target_bucket.name}", desired_full, client)
             await manage_dynamic_group(f"GrpReadOnly_{target_bucket.name}", f"ReadOnly_{target_bucket.name}", desired_read, client)
     except Exception as e:
@@ -727,11 +723,7 @@ async def delete_s3_bucket_route(
 
     # 2. Fire the network cancellation command to SVM
     try:
-        async with httpx.AsyncClient(
-            auth=(cfg.username, cfg.password),
-            verify=settings.netapp_verify_ssl,
-            timeout=30,
-        ) as client:
+        async with get_netapp_client(cfg, timeout=30) as client:
             # 2a: Scrape and physically destroy orphaned proxy Groups dynamically to allow ONTAP to drop the policies cleanly
             try:
                 group_url = f"{cfg.base_url}/protocols/s3/services/{cfg.svm_uuid}/groups"
