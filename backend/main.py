@@ -465,6 +465,9 @@ async def create_bucket_policies_async(cfg: SvmConfig, bucket_name: str):
         "statements": [{"effect": "allow", "actions": ["GetObject", "ListBucket"], "resources": [bucket_name, f"{bucket_name}/*"]}]
     }
     
+    if settings.trace_mode:
+        print(f"\\n[BACKGROUND] Queued asynchronous policy generation for bucket '{bucket_name}'. Waiting for bucket to materialize...")
+
     # Retry up to 15 times (~30 seconds) because bucket creation on NetApp can be asynchronous
     for attempt in range(15):
         await asyncio.sleep(2)
@@ -473,10 +476,18 @@ async def create_bucket_policies_async(cfg: SvmConfig, bucket_name: str):
                 res1 = await client.post(policy_url, json=full_access_payload, headers=_netapp_headers())
                 res2 = await client.post(policy_url, json=read_only_payload, headers=_netapp_headers())
                 if res1.status_code in (200, 201) and res2.status_code in (200, 201):
-                    # Successfully created policies!
+                    if settings.trace_mode:
+                        print(f"[BACKGROUND] Successfully linked policies for bucket '{bucket_name}' on attempt {attempt + 1}!\\n")
                     return
-        except Exception:
-            pass
+                else:
+                    if settings.trace_mode:
+                        print(f"[BACKGROUND] Attempt {attempt + 1}: Policies rejected by NetApp, bucket likely still building. Retrying...")
+        except Exception as e:
+            if settings.trace_mode:
+                print(f"[BACKGROUND] Attempt {attempt + 1}: Could not reach API ({e}). Retrying...")
+                
+    if settings.trace_mode:
+        print(f"[BACKGROUND ERROR] Gave up generating policies for '{bucket_name}' after 15 loops!\\n")
 
 
 @app.post("/api/s3/buckets", status_code=201, response_model=S3BucketSchema)
